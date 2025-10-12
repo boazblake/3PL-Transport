@@ -42,7 +42,6 @@
                                :visibility true
                                :attribution "OpenStreetMap"}))
         collection (new Vector "Routes")]
-    (js/console.log "Collection created:" collection)
     (let [globe-instance (new Globe #js {:target "globe-container"
                                        :name "Earth"
                                        :layers #js [osm collection]
@@ -81,125 +80,73 @@
       (js/console.error "Error adding entity to collection:" e))))
 
 (defn render-routes [globe ellipsoid collection routes num]
-  (js/console.log "=== RENDER-ROUTES START ===")
-  (js/console.log "Routes count:" (count routes))
-  (js/console.log "First route:" (first routes))
-  (js/console.log "Collection:" collection)
-  (js/console.log "Ellipsoid:" ellipsoid)
-  
   (.clear collection)
-  (js/console.log "Collection cleared")
-  
   (let [LonLat og/LonLat
         Entity og/Entity
         paths (js/Array.)
         colors (js/Array.)
         anim-index (js/Array.)]
     
-    (js/console.log "Processing" (count routes) "routes...")
     
     (doseq [[idx route] (map-indexed vector routes)]
-      (js/console.log "\n--- Route" idx "---")
-      (js/console.log "Route data:" route)
-      (js/console.log "srcIata:" (:srcIata route) "dstIata:" (:dstIata route))
-      
       ;; Get coordinates from airport objects
       (let [src-airport (:srcAirport route)
             dst-airport (:dstAirport route)]
-        (js/console.log "Source airport:" src-airport)
-        (js/console.log "Dest airport:" dst-airport)
         
         (let [src-lat-str (:lat src-airport)
               src-lng-str (:lng src-airport)
               dst-lat-str (:lat dst-airport)
               dst-lng-str (:lng dst-airport)]
-          (js/console.log "Source coords (strings):" src-lat-str src-lng-str)
-          (js/console.log "Dest coords (strings):" dst-lat-str dst-lng-str)
           
           (let [src-lat (js/parseFloat src-lat-str)
                 src-lng (js/parseFloat src-lng-str)
                 dst-lat (js/parseFloat dst-lat-str)
                 dst-lng (js/parseFloat dst-lng-str)]
-            (js/console.log "Source coords (parsed):" src-lat src-lng)
-            (js/console.log "Dest coords (parsed):" dst-lat dst-lng)
             
             (let [valid? (and src-lat src-lng dst-lat dst-lng
                             (not (js/isNaN src-lat)) (not (js/isNaN src-lng))
                             (not (js/isNaN dst-lat)) (not (js/isNaN dst-lng)))]
-              (js/console.log "Coords valid?" valid?)
               
               (if valid?
                 (do
-                  (js/console.log "Creating LonLat objects...")
                   (let [src (new LonLat src-lng src-lat)
                         dst (new LonLat dst-lng dst-lat)]
-                    (js/console.log "Source LonLat:" src)
-                    (js/console.log "Dest LonLat:" dst)
-                    (js/console.log "Creating path...")
                     (let [p (create-path ellipsoid src dst num {:color [1.0 0.5 0.0]})]
-                      (js/console.log "Path created:" p)
-                      (js/console.log "Path length:" (.-length (:path p)))
                       (.push paths (:path p))
                       (.push colors (:colors p))
-                      (.push anim-index (.randomi (.-math og) 0 num))
-                      (js/console.log "Path added to arrays. Total paths:" (.-length paths)))))
-                (js/console.error "INVALID COORDS for route:" (:srcIata route) "->" (:dstIata route))))))))
-    
-    (js/console.log "\n=== CREATING ENTITY ===")
-    (js/console.log "Total paths created:" (.-length paths))
-    (js/console.log "Paths array:" paths)
-    (js/console.log "Colors array:" colors)
+                      (.push anim-index (.randomi (.-math og) 0 num)))))))))))
     
     (if (pos? (.-length paths))
       (do
-        (js/console.log "Creating polyline entity...")
         (let [polyline-config {:path3v paths
                               :pathColors colors
                               :thickness 3
                               :isClosed false
                               :visibility true}
               entity-config {:polyline polyline-config}]
-          (js/console.log "Polyline config:" (clj->js polyline-config))
-          (js/console.log "Entity config:" (clj->js entity-config))
           
           (let [entity (new Entity (clj->js entity-config))]
-            (js/console.log "Entity created:" entity)
-            (js/console.log "Entity polyline:" (.-polyline entity))
             (.add collection entity)
-            (js/console.log "Entity added to collection")
-            (js/console.log "Collection entities count:" (if (.-getEntities collection)
-                                                            (.-length (.getEntities collection))
-                                                            "unknown"))
-            (js/console.log "=== RENDER-ROUTES COMPLETE ===\n")
             {:entities [entity] :anim-index anim-index})))
       (do
         (js/console.error "NO PATHS CREATED!")
         nil))))
 
 (defn animate-routes [entities anim-index num animation-ref]
-  (js/console.log "=== ANIMATE-ROUTES START ===")
-  (js/console.log "Entities (original):" entities)
   
   ;; Convert ClojureScript vector to JS array
   (let [entities-array (if (array? entities)
                          entities
                          (clj->js entities))]
-    (js/console.log "Entities (converted):" entities-array)
-    (js/console.log "Entities length:" (.-length entities-array))
-    (js/console.log "Anim index:" anim-index)
-    (js/console.log "Num:" num)
-    (js/console.log "Animation ref:" animation-ref)
     
     (when @animation-ref
-      (js/console.log "Cancelling previous animation:" @animation-ref)
       (js/cancelAnimationFrame @animation-ref))
     
     (letfn [(animate []
               (dotimes [i (.-length entities-array)]
                 (let [entity (aget entities-array i)
                       poly (.-polyline entity)]
-                  (when (zero? (mod (js/Date.now) 1000))
-                    (js/console.log "Animating entity" i "polyline:" poly))
+                  (when (zero? (mod (js/Date.now) 1000)))
                   (let [cArr (.getPathColors ^js poly)]
                     (dotimes [j (.-length cArr)]
                       (let [idx (aget anim-index j)
@@ -213,9 +160,7 @@
                         (.setPointColor ^js poly #js [r g b 0.3] (- idx 2) j)
                         (.setPointColor ^js poly #js [r g b 0.1] (- idx 3) j))))))
               (reset! animation-ref (js/requestAnimationFrame animate)))]
-      (js/console.log "Starting animation loop...")
-      (animate)
-      (js/console.log "Animation started with ID:" @animation-ref))))
+      (animate))))
 
 (defn check-gl-error [gl]
   (let [err (when gl (.getError gl))]

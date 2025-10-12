@@ -99,7 +99,6 @@
                                            :timestamp (.toISOString (js/Date.))}))}))
        (.then #(.json ^js %))
        (.then (fn [response]
-                (js/console.log "Search saved:" response)
                 (rf/dispatch [:map/fetch-search-history])))
        (.catch (fn [error]
                  (js/console.error "Failed to save search:" error))))
@@ -123,12 +122,10 @@
 (rf/reg-event-fx
  :map/fetch-available-routes
  (fn [{:keys [db]} _]
-   (js/console.log "Fetching available routes from backend")
    (-> (js/fetch (str backend-url "/routes/available"))
        (.then #(.json ^js %))
        (.then (fn [routes]
                 (let [clj-routes (js->clj routes :keywordize-keys true)]
-                  (js/console.log "Loaded routes:" (count clj-routes))
                   (rf/dispatch [:map/set-available-routes clj-routes]))))
        (.catch (fn [error]
                  (js/console.error "Failed to fetch available routes:" error))))
@@ -163,21 +160,18 @@
  :map/toggle-route-picker
  (fn [db _]
    (let [current-state (get-in db [:map :show-route-picker] false)]
-     (js/console.log "Toggling route picker from:" current-state "to:" (not current-state))
      (assoc-in db [:map :show-route-picker] (not current-state)))))
 
 ;; Save a picked route to backend
 (rf/reg-event-fx
  :map/save-picked-route
  (fn [{:keys [db]} [_ route]]
-   (js/console.log "Saving route:" route)
    (-> (js/fetch (str backend-url "/routes")
                  (clj->js {:method "POST"
                            :headers {"Content-Type" "application/json"}
                            :body (js/JSON.stringify (clj->js route))}))
        (.then #(.json ^js %))
        (.then (fn [response]
-                (js/console.log "Route saved successfully:" response)
                 (rf/dispatch [:map/fetch-saved-routes])))
        (.catch (fn [error]
                  (js/console.error "Failed to save route:" error))))
@@ -187,19 +181,31 @@
 (rf/reg-event-fx
  :map/remove-route
  (fn [{:keys [db]} [_ route]]
-   (let [route-id (or (:id route) 
-                     (str (:srcIata route) "-" (:dstIata route) "-" (:airline route)))
-         url (str backend-url "/routes/" (js/encodeURIComponent route-id))]
-     (js/console.log "Removing route with ID:" route-id)
+   (let [url (str backend-url "/routes"
+                  "?srcIata=" (js/encodeURIComponent (:srcIata route))
+                  "&dstIata=" (js/encodeURIComponent (:dstIata route))
+                  "&airline=" (js/encodeURIComponent (:airline route)))]
      (-> (js/fetch url (clj->js {:method "DELETE"}))
          (.then (fn [response]
-                  (if (.ok response)
-                    (do
-                      (js/console.log "Route removed successfully")
-                      (rf/dispatch [:map/fetch-saved-routes]))
-                    (throw (js/Error. (str "HTTP error: " (.status response)))))))
+                  (if (.-ok response)
+                    (rf/dispatch [:map/fetch-saved-routes])
+                    (throw (js/Error. (str "HTTP error: " (.-statusText response)))))))
          (.catch (fn [error]
                    (js/console.error "Failed to remove route:" error)))))
+   {:db db}))
+
+(rf/reg-event-fx
+ :map/create-simple-route
+ (fn [{:keys [db]} [_ srcIata dstIata]]
+   (-> (js/fetch (str backend-url "/routes/new")
+                 (clj->js {:method "POST"
+                           :headers {"Content-Type" "application/json"}
+                           :body (js/JSON.stringify (clj->js {:srcIata srcIata :dstIata dstIata}))}))
+       (.then #(.json ^js %))
+       (.then (fn [response]
+                (rf/dispatch [:map/fetch-saved-routes])))
+       (.catch (fn [error]
+                 (js/console.error "Failed to create route:" error))))
    {:db db}))
 
 ;; Focus on a route (fly to it on the map)
@@ -232,7 +238,6 @@
 (rf/reg-event-db
  :map/fetch-routes-success
  (fn [db [_ routes]]
-   (js/console.log "Fetched routes:" (clj->js routes))
    (assoc db :map/routes routes)))
 
 (rf/reg-event-db

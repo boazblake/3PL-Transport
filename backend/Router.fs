@@ -7,6 +7,7 @@ open System.IO
 open System.Text.Json
 open System.Net.Http
 open System.Threading.Tasks
+open System
 
 type SearchHistory = {
     location: string
@@ -48,7 +49,7 @@ type Route = {
 // In-memory storage
 let mutable searchHistory: SearchHistory list = []
 let mutable routes: Route list = []
-let mutable availableRoutes: Route list = [] // Changed OpenGlobusRoute to Route
+let mutable availableRoutes: Route list = []
 
 // Fetch available routes from OpenGlobus
 let fetchAvailableRoutes() =
@@ -56,7 +57,6 @@ let fetchAvailableRoutes() =
         try
             use client = new HttpClient()
             let! response = client.GetStringAsync("https://sandbox.openglobus.org/examples/polylinesColorAnimation/routes.json")
-            printfn "Raw JSON response: %s" response // Log the raw JSON
             let options = JsonSerializerOptions()
             options.PropertyNameCaseInsensitive <- true
             let fetchedRoutes = JsonSerializer.Deserialize<Route list>(response, options)
@@ -114,33 +114,74 @@ let getRoutes next (ctx: HttpContext) =
 
 let getAvailableRoutes next (ctx: HttpContext) =
     task {
-        // Fetch on-demand if not already loaded
         if List.isEmpty availableRoutes then
             do! fetchAvailableRoutes()
-        
         return! json availableRoutes next ctx
     }
 
 let addRoute next (ctx: HttpContext) =
     task {
         let! route = ctx.BindModelAsync<Route>()
-        
-        // Check if route already exists
         let exists = 
             routes 
             |> List.exists (fun r -> 
-                r.srcIata = route.srcIata && // Fixed case
-                r.dstIata = route.dstIata && // Fixed case
-                r.airline = route.airline)   // Fixed case
-        
+                r.srcIata = route.srcIata && 
+                r.dstIata = route.dstIata && 
+                r.airline = route.airline)
         if not exists then
             routes <- route :: routes
-            
         return! json {| 
             success = true
             message = "Route saved successfully"
             route = route
         |} next ctx
+    }
+
+let addSimpleRoute next (ctx: HttpContext) =
+    task {
+        let! data = ctx.BindJsonAsync<{| srcIata: string; dstIata: string |}>()
+        let srcIata = data.srcIata
+        let dstIata = data.dstIata
+
+        // Ensure availableRoutes is populated
+        if List.isEmpty availableRoutes then
+            do! fetchAvailableRoutes()
+
+        // Find source and destination airports
+        let srcRoute = availableRoutes |> List.tryFind (fun r -> r.srcIata = srcIata)
+        let dstRoute = availableRoutes |> List.tryFind (fun r -> r.dstIata = dstIata)
+
+        match srcRoute, dstRoute with
+        | Some src, Some dst ->
+            let uniqueAirline = sprintf "CUSTOM-%s" (Guid.NewGuid().ToString())
+            let newRoute = {
+                airline = uniqueAirline
+                airlineId = uniqueAirline
+                srcIata = srcIata
+                srcAirportId = src.srcAirportId
+                dstIata = dstIata
+                dstAirportId = dst.dstAirportId
+                codeshare = ""
+                stops = "0"
+                equipment = "Unknown"
+                srcAirport = src.srcAirport
+                dstAirport = dst.dstAirport
+            }
+            let exists = 
+                routes 
+                |> List.exists (fun r -> 
+                    r.srcIata = srcIata && 
+                    r.dstIata = dstIata && 
+                    r.airline = uniqueAirline)
+            if not exists then
+                routes <- newRoute :: routes
+            return! json {| 
+                success = true
+                message = "Simple route created successfully"
+                route = newRoute
+            |} next ctx
+        | _ ->
+            return! RequestErrors.BAD_REQUEST "Invalid source or destination IATA code" next ctx
     }
 
 let deleteRoute next (ctx: HttpContext) =
@@ -149,32 +190,27 @@ let deleteRoute next (ctx: HttpContext) =
             match ctx.TryGetQueryStringValue "srcIata" with
             | Some value -> value
             | None -> ""
-        
         let dstIata = 
             match ctx.TryGetQueryStringValue "dstIata" with
             | Some value -> value
             | None -> ""
-        
         let airline = 
             match ctx.TryGetQueryStringValue "airline" with
             | Some value -> value
             | None -> ""
-        
         let routeExists = 
             routes 
             |> List.exists (fun r -> 
-                r.srcIata = srcIata && // Fixed case
-                r.dstIata = dstIata && // Fixed case
-                r.airline = airline)   // Fixed case
-        
+                r.srcIata = srcIata && 
+                r.dstIata = dstIata && 
+                r.airline = airline)
         if routeExists then
             routes <- 
                 routes 
                 |> List.filter (fun r -> 
-                    not (r.srcIata = srcIata && // Fixed case
-                         r.dstIata = dstIata && // Fixed case
-                         r.airline = airline))   // Fixed case
-            
+                    not (r.srcIata = srcIata && 
+                         r.dstIata = dstIata && 
+                         r.airline = airline))
             return! json {| 
                 success = true
                 message = "Route deleted successfully"
@@ -204,11 +240,10 @@ let appRouter = router {
     get "/map" getMap
     post "/search" saveSearch
     get "/search-history" getSearchHistory
-    
-    // Route endpoints
     get "/routes" getRoutes
     get "/routes/available" getAvailableRoutes
     post "/routes" addRoute
+    post "/routes/new" addSimpleRoute
     delete "/routes" deleteRoute
     post "/routes/save" saveRoutesToFile
 }
