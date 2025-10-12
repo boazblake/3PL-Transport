@@ -46,27 +46,70 @@ type Route = {
     dstAirport: Airport
 }
 
-// In-memory storage
+type AirportCoord = {
+    iata: string
+    icao: string
+    lat: string
+    lng: string
+    name: string
+}
+
 let mutable searchHistory: SearchHistory list = []
 let mutable routes: Route list = []
-let mutable availableRoutes: Route list = []
 
-// Fetch available routes from OpenGlobus
-let fetchAvailableRoutes() =
+let saveAirportCoordsToFile (filePath: string) (airports: AirportCoord list) =
+    try
+        let options = JsonSerializerOptions()
+        options.WriteIndented <- true
+        let jsonText = JsonSerializer.Serialize(airports, options)
+        File.WriteAllText(filePath, jsonText)
+        printfn "Saved %d airport coordinates to %s" (List.length airports) filePath
+    with ex ->
+        printfn "Error saving airport coordinates: %s" ex.Message
+
+let fetchAndSaveAirports (airportsPath: string) =
     task {
-        try
-            use client = new HttpClient()
-            let! response = client.GetStringAsync("https://sandbox.openglobus.org/examples/polylinesColorAnimation/routes.json")
-            let options = JsonSerializerOptions()
-            options.PropertyNameCaseInsensitive <- true
-            let fetchedRoutes = JsonSerializer.Deserialize<Route list>(response, options)
-            availableRoutes <- fetchedRoutes
-            printfn "Fetched %d available routes from OpenGlobus" (List.length fetchedRoutes)
-        with ex ->
-            printfn "Error fetching available routes: %s" ex.Message
+        use client = new HttpClient()
+        let! response = client.GetStringAsync("https://sandbox.openglobus.org/examples/polylinesColorAnimation/routes.json")
+        let options = JsonSerializerOptions()
+        options.PropertyNameCaseInsensitive <- true
+        let fetchedRoutes = JsonSerializer.Deserialize<Route list>(response, options)
+        printfn "Fetched %d routes from OpenGlobus" (List.length fetchedRoutes)
+        let airports =
+            fetchedRoutes
+            |> List.collect (fun r -> [
+                { iata = r.srcIata; icao = r.srcAirport.icao; lat = r.srcAirport.lat; lng = r.srcAirport.lng; name = r.srcAirport.name }
+                { iata = r.dstIata; icao = r.dstAirport.icao; lat = r.dstAirport.lat; lng = r.dstAirport.lng; name = r.dstAirport.name }
+            ])
+            |> List.distinctBy (fun a -> a.iata)
+        saveAirportCoordsToFile airportsPath airports
+        printfn "Saved %d airports to file" (List.length airports)
+        return airports
     }
 
-// Load saved routes from JSON file
+let loadAirportsFromFile() =
+    task {
+        try
+            let airportsPath = Path.Combine(__SOURCE_DIRECTORY__, "airports.json")
+            if File.Exists(airportsPath) then
+                let! json = File.ReadAllTextAsync(airportsPath)
+                let options = JsonSerializerOptions()
+                options.PropertyNameCaseInsensitive <- true
+                let airports = JsonSerializer.Deserialize<AirportCoord list>(json, options)
+                if List.isEmpty airports then
+                    printfn "airports.json is empty, fetching from OpenGlobus"
+                    return! fetchAndSaveAirports airportsPath
+                else
+                    printfn "Loaded %d airports from local file" (List.length airports)
+                    return airports
+            else
+                printfn "airports.json file not found, fetching from OpenGlobus"
+                return! fetchAndSaveAirports airportsPath
+        with ex ->
+            printfn "Error loading airports from file: %s" ex.Message
+            return []
+    }
+
 let loadRoutesFromFile (filePath: string) =
     try
         if File.Exists(filePath) then
@@ -81,13 +124,11 @@ let loadRoutesFromFile (filePath: string) =
     with ex ->
         printfn "Error loading routes: %s" ex.Message
 
-// Initialize data on module load
 let initializeData() =
     let routesPath = Path.Combine(__SOURCE_DIRECTORY__, "routes.json")
     loadRoutesFromFile routesPath
-    printfn "Server initialized. Call /routes/available to fetch routes from OpenGlobus."
+    printfn "Server initialized."
 
-// Call initialization
 do initializeData()
 
 let mapData = {| lat = 37.7749; lng = -122.4194; zoom = 12 |}
@@ -108,15 +149,19 @@ let saveSearch next (ctx: HttpContext) =
 let getSearchHistory next (ctx: HttpContext) =
     json searchHistory next ctx
 
-// Route endpoints
 let getRoutes next (ctx: HttpContext) =
     json routes next ctx
 
 let getAvailableRoutes next (ctx: HttpContext) =
     task {
-        if List.isEmpty availableRoutes then
-            do! fetchAvailableRoutes()
-        return! json availableRoutes next ctx
+        let! airports = loadAirportsFromFile()
+        return! json airports next ctx
+    }
+
+let getAirports next (ctx: HttpContext) =
+    task {
+        let! airports = loadAirportsFromFile()
+        return! json airports next ctx
     }
 
 let addRoute next (ctx: HttpContext) =
@@ -142,30 +187,52 @@ let addSimpleRoute next (ctx: HttpContext) =
         let! data = ctx.BindJsonAsync<{| srcIata: string; dstIata: string |}>()
         let srcIata = data.srcIata
         let dstIata = data.dstIata
-
-        // Ensure availableRoutes is populated
-        if List.isEmpty availableRoutes then
-            do! fetchAvailableRoutes()
-
-        // Find source and destination airports
-        let srcRoute = availableRoutes |> List.tryFind (fun r -> r.srcIata = srcIata)
-        let dstRoute = availableRoutes |> List.tryFind (fun r -> r.dstIata = dstIata)
-
-        match srcRoute, dstRoute with
+        let! airports = loadAirportsFromFile()
+        let srcAirport = airports |> List.tryFind (fun a -> a.iata = srcIata)
+        let dstAirport = airports |> List.tryFind (fun a -> a.iata = dstIata)
+        match srcAirport, dstAirport with
         | Some src, Some dst ->
             let uniqueAirline = sprintf "CUSTOM-%s" (Guid.NewGuid().ToString())
             let newRoute = {
                 airline = uniqueAirline
                 airlineId = uniqueAirline
                 srcIata = srcIata
-                srcAirportId = src.srcAirportId
+                srcAirportId = ""
                 dstIata = dstIata
-                dstAirportId = dst.dstAirportId
+                dstAirportId = ""
                 codeshare = ""
                 stops = "0"
                 equipment = "Unknown"
-                srcAirport = src.srcAirport
-                dstAirport = dst.dstAirport
+                srcAirport = {
+                    airportId = ""
+                    name = src.name
+                    city = ""
+                    country = ""
+                    icao = src.icao
+                    lat = src.lat
+                    lng = src.lng
+                    alt = ""
+                    timezone = ""
+                    dst = ""
+                    tz = ""
+                    ``type`` = "airport"
+                    source = ""
+                }
+                dstAirport = {
+                    airportId = ""
+                    name = dst.name
+                    city = ""
+                    country = ""
+                    icao = dst.icao
+                    lat = dst.lat
+                    lng = dst.lng
+                    alt = ""
+                    timezone = ""
+                    dst = ""
+                    tz = ""
+                    ``type`` = "airport"
+                    source = ""
+                }
             }
             let exists = 
                 routes 
@@ -242,6 +309,7 @@ let appRouter = router {
     get "/search-history" getSearchHistory
     get "/routes" getRoutes
     get "/routes/available" getAvailableRoutes
+    get "/airports" getAirports
     post "/routes" addRoute
     post "/routes/new" addSimpleRoute
     delete "/routes" deleteRoute

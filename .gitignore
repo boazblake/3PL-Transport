@@ -1,0 +1,47 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# F# / .NET
+backend/bin/
+backend/obj/
+*.user
+*.suo
+*.cache
+*.dll
+*.exe
+*.pdb
+*.log
+
+# ClojureScript / Shadow-CLJS
+frontend/.shadow-cljs/
+frontend/node_modules/
+frontend/resources/public/js/
+.cpcache/
+.nrepl-port
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build outputs
+target/
+out/
+.cljs_node_repl/
+
+# Dependencies
+package-lock.json
+yarn.lock
+
+# Environment
+.env
+.env.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
