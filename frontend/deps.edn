@@ -1,0 +1,5 @@
+:dependencies [[reagent "1.2.0"]
+               [re-frame "1.4.3"]
+               [cljs-ajax "0.8.4"]
+               [day8.re-frame/http-fx "0.2.4"]
+               [@openglobus/og "0.0.99"]]
