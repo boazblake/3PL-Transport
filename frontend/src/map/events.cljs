@@ -1,41 +1,55 @@
 (ns map.events
   (:require [re-frame.core :as rf]
-            [ajax.core :refer [GET POST DELETE json-response-format json-request-format url-request-format]]
+            [ajax.core :as ajax]
             [day8.re-frame.http-fx]
             [map.db :as db]))
 
 (def backend-url "http://localhost:8080")
 
-; ;; Clear existing handlers to prevent overwriting warnings
-; (rf/clear-event :initialize)
-; (rf/clear-event :map/fetch-initial-data)
-; (rf/clear-event :map/set-initial-data)
-; (rf/clear-event :map/fetch-search-history)
-; (rf/clear-event :map/set-search-history)
-; (rf/clear-event :map/update-search)
-; (rf/clear-event :map/search-location)
-; (rf/clear-event :map/geocode)
-; (rf/clear-event :map/geocode-success)
-; (rf/clear-event :map/save-search)
-; (rf/clear-event :map/set-center)
-; (rf/clear-event :map/set-zoom)
-; (rf/clear-event :map/fetch-available-routes)
-; (rf/clear-event :map/set-available-routes)
-; (rf/clear-event :map/fetch-saved-routes)
-; (rf/clear-event :map/set-saved-routes)
-; (rf/clear-event :map/set-error)
-; (rf/clear-event :map/toggle-route-picker)
-; (rf/clear-event :map/save-picked-route)
-; (rf/clear-event :map/remove-route)
-; (rf/clear-event :map/create-simple-route)
-; (rf/clear-event :map/create-simple-route-success)
-; (rf/clear-event :map/create-simple-route-failure)
-; (rf/clear-event :map/clear-notification)
-; (rf/clear-event :map/focus-route)
-; (rf/clear-event :map/set-globe-instance)
-; (rf/clear-event :map/fetch-airports-fallback)
-; (rf/clear-event :map/set-fallback-airports)
+;; Coeffects
+(rf/reg-cofx
+ :now
+ (fn [coeffects _]
+   (assoc coeffects :now (js/Date.))))
 
+;; Helper functions
+(defn- http-get [uri on-success on-failure]
+  {:method :get
+   :uri uri
+   :response-format (ajax/json-response-format {:keywords? true})
+   :on-success on-success
+   :on-failure on-failure})
+
+(defn- http-post [uri params on-success on-failure]
+  {:method :post
+   :uri uri
+   :params params
+   :format (ajax/json-request-format)
+   :response-format (ajax/json-response-format {:keywords? true})
+   :on-success on-success
+   :on-failure on-failure})
+
+(defn- http-delete [uri on-success on-failure]
+  {:method :delete
+   :uri uri
+   :format (ajax/url-request-format)
+   :response-format (ajax/json-response-format {:keywords? true})
+   :on-success on-success
+   :on-failure on-failure})
+
+(defn- show-notification [db title message type]
+  (assoc db :map/notification {:title title :message message :type type}))
+
+(defn- clear-notification [db]
+  (dissoc db :map/notification))
+
+(defn- start-loading [db]
+  (assoc db :map/loading-routes true))
+
+(defn- stop-loading [db]
+  (assoc db :map/loading-routes false))
+
+;; Initialize
 (rf/reg-event-fx
  :initialize
  (fn [_ _]
@@ -45,264 +59,258 @@
          [:dispatch [:map/fetch-saved-routes]]
          [:dispatch [:map/fetch-available-routes]]]}))
 
-;; Fetch initial map data from backend
+;; Map data events
 (rf/reg-event-fx
  :map/fetch-initial-data
  (fn [{:keys [db]} _]
    {:db db
-    :http-xhrio {:method :get
-                 :uri (str backend-url "/map")
-                 :response-format (json-response-format {:keywords? true})
-                 :on-success [:map/set-initial-data]
-                 :on-failure [:map/set-error]}}))
+    :http-xhrio (http-get 
+                 (str backend-url "/map")
+                 [:map/set-initial-data]
+                 [:map/http-error "Failed to fetch map data"])}))
 
 (rf/reg-event-db
  :map/set-initial-data
- (fn [db [_ map-data]]
+ (fn [db [_ {:keys [lat lng zoom]}]]
    (-> db
-       (assoc-in [:map :center] {:lat (:lat map-data) :lng (:lng map-data)})
-       (assoc-in [:map :zoom] (:zoom map-data)))))
+       (assoc :map/center {:lat lat :lng lng})
+       (assoc :map/zoom zoom))))
 
-;; Fetch search history from backend
+;; Search history events
 (rf/reg-event-fx
  :map/fetch-search-history
  (fn [{:keys [db]} _]
    {:db db
-    :http-xhrio {:method :get
-                 :uri (str backend-url "/search-history")
-                 :response-format (json-response-format {:keywords? true})
-                 :on-success [:map/set-search-history]
-                 :on-failure [:map/set-error]}}))
+    :http-xhrio (http-get
+                 (str backend-url "/search-history")
+                 [:map/set-search-history]
+                 [:map/http-error "Failed to fetch search history"])}))
 
 (rf/reg-event-db
  :map/set-search-history
  (fn [db [_ history]]
-   (assoc-in db [:map :history] history)))
+   (assoc db :map/history history)))
 
 (rf/reg-event-db
  :map/update-search
  (fn [db [_ search-text]]
-   (assoc-in db [:map :search] search-text)))
+   (assoc db :map/search search-text)))
 
+;; Geocoding events
 (rf/reg-event-fx
  :map/search-location
- (fn [{:keys [db]} [_ search-text]]
-   {:db db
-    :fx [[:dispatch [:map/geocode search-text]]]}))
+ (fn [_ [_ search-text]]
+   (when (seq search-text)
+     {:fx [[:dispatch [:map/geocode search-text]]]})))
 
-;; Geocode and save to backend
 (rf/reg-event-fx
  :map/geocode
- (fn [{:keys [db]} [_ location]]
+ (fn [_ [_ location]]
    (when (seq location)
-     {:http-xhrio {:method :get
-                   :uri (str "https://nominatim.openstreetmap.org/search?format=json&q="
-                             (js/encodeURIComponent location))
-                   :response-format (json-response-format {:keywords? true})
-                   :on-success [:map/geocode-success location]
-                   :on-failure [:map/set-error]}})))
+     {:http-xhrio (http-get
+                   (str "https://nominatim.openstreetmap.org/search?format=json&q="
+                        (js/encodeURIComponent location))
+                   [:map/geocode-success location]
+                   [:map/http-error "Geocoding failed"])})))
 
 (rf/reg-event-fx
  :map/geocode-success
- (fn [{:keys [db]} [_ location results]]
-   (if (> (count results) 0)
-     (let [result (first results)
-           lat (js/parseFloat (:lat result))
+ [(rf/inject-cofx :now)]
+ (fn [{:keys [db now]} [_ location results]]
+   (if-let [result (first results)]
+     (let [lat (js/parseFloat (:lat result))
            lng (js/parseFloat (:lon result))]
        {:fx [[:dispatch [:map/set-center {:lat lat :lng lng}]]
              [:dispatch [:map/set-zoom 13]]
-             [:dispatch [:map/save-search location lat lng]]]})
-     {:db (assoc db :notification {:title "Error" :message "No geocoding results found" :type :error})})))
+             [:dispatch [:map/save-search location lat lng (.toISOString now)]]]})
+     {:db (show-notification db "Error" "No results found" :error)})))
 
 (rf/reg-event-fx
  :map/save-search
- (fn [{:keys [db]} [_ location lat lng]]
+ (fn [{:keys [db]} [_ location lat lng timestamp]]
    {:db db
-    :http-xhrio {:method :post
-                 :uri (str backend-url "/search")
-                 :params {:location location :lat lat :lng lng :timestamp (.toISOString (js/Date.))}
-                 :format (json-request-format)
-                 :response-format (json-response-format {:keywords? true})
-                 :on-success [:map/fetch-search-history]
-                 :on-failure [:map/set-error]}}))
+    :http-xhrio (http-post
+                 (str backend-url "/search")
+                 {:location location :lat lat :lng lng :timestamp timestamp}
+                 [:map/fetch-search-history]
+                 [:map/http-error "Failed to save search"])}))
 
+;; Map view events
 (rf/reg-event-db
  :map/set-center
  (fn [db [_ center]]
-   (assoc-in db [:map :center] center)))
+   (assoc db :map/center center)))
 
 (rf/reg-event-db
  :map/set-zoom
  (fn [db [_ zoom]]
-   (assoc-in db [:map :zoom] zoom)))
+   (assoc db :map/zoom zoom)))
 
-;; Route Management Events
+;; Route management events
 (rf/reg-event-fx
  :map/fetch-available-routes
  (fn [{:keys [db]} _]
-   {:db (assoc db :loading-routes true)
-    :http-xhrio {:method :get
-                 :uri (str backend-url "/routes/available")
-                 :response-format (json-response-format {:keywords? true})
-                 :on-success [:map/set-available-routes]
-                 :on-failure [:map/fetch-airports-fallback]}}))
+   {:db (start-loading db)
+    :http-xhrio (http-get
+                 (str backend-url "/routes/available")
+                 [:map/set-available-routes]
+                 [:map/fetch-airports-fallback])}))
 
 (rf/reg-event-db
  :map/set-available-routes
  (fn [db [_ routes]]
-   (assoc db :available-routes routes :loading-routes false)))
+   (-> db
+       (assoc :map/available-routes routes)
+       stop-loading)))
 
 (rf/reg-event-fx
  :map/fetch-airports-fallback
- (fn [{:keys [db]} [_ _]]
-   {:db (assoc db :notification {:title "Warning" :message "Failed to fetch routes, using airport fallback" :type :error}
-                  :loading-routes true)
-    :http-xhrio {:method :get
-                 :uri (str backend-url "/airports")
-                 :response-format (json-response-format {:keywords? true})
-                 :on-success [:map/set-fallback-airports]
-                 :on-failure [:map/set-error]}}))
+ (fn [{:keys [db]} _]
+   {:db (-> db
+            (show-notification "Warning" "Using airport fallback" :warning)
+            start-loading)
+    :http-xhrio (http-get
+                 (str backend-url "/airports")
+                 [:map/set-fallback-airports]
+                 [:map/http-error "Failed to fetch airports"])}))
 
 (rf/reg-event-db
  :map/set-fallback-airports
  (fn [db [_ airports]]
-   (assoc db :available-routes airports
-             :loading-routes false)))
+   (-> db
+       (assoc :map/available-routes airports)
+       stop-loading)))
 
 (rf/reg-event-fx
  :map/fetch-saved-routes
  (fn [{:keys [db]} _]
-   {:db (assoc db :loading-routes true)
-    :http-xhrio {:method :get
-                 :uri (str backend-url "/routes")
-                 :response-format (json-response-format {:keywords? true})
-                 :on-success [:map/set-saved-routes]
-                 :on-failure [:map/set-error]}}))
+   {:db (start-loading db)
+    :http-xhrio (http-get
+                 (str backend-url "/routes")
+                 [:map/set-saved-routes]
+                 [:map/http-error "Failed to fetch routes"])}))
 
 (rf/reg-event-db
  :map/set-saved-routes
  (fn [db [_ routes]]
-   (assoc db :routes routes :loading-routes false)))
-
-(rf/reg-event-db
- :map/set-error
- (fn [db [_ _]]
-   (assoc db :notification {:title "Error" :message "Failed to perform operation" :type :error}
-             :loading-routes false)))
+   (-> db
+       (assoc :map/routes routes)
+       stop-loading)))
 
 (rf/reg-event-db
  :map/toggle-route-picker
  (fn [db _]
-   (update-in db [:map :show-route-picker] not)))
+   (update db :map/show-route-picker not)))
 
+;; Create route events
 (rf/reg-event-fx
- :map/save-picked-route
- (fn [{:keys [db]} [_ route]]
-   {:db (assoc db :loading-routes true)
-    :http-xhrio {:method :post
-                 :uri (str backend-url "/routes")
-                 :params route
-                 :format (json-request-format)
-                 :response-format (json-response-format {:keywords? true})
-                 :on-success [:map/save-picked-route-success]
-                 :on-failure [:map/set-error]}}))
-
-(rf/reg-event-fx
- :map/save-picked-route-success
- (fn [{:keys [db]} [_ _]]
-   {:db (assoc db :loading-routes false
-                  :notification {:title "Success" :message "Route saved successfully" :type :success})
-    :fx [[:dispatch [:map/fetch-saved-routes]]
-         [:dispatch-later {:ms 5000 :dispatch [:map/clear-notification]}]]}))
-
-(rf/reg-event-fx
- :map/remove-route
- (fn [{:keys [db]} [_ route]]
-   (js/console.log "Attempting to remove route:" (clj->js route))
-   {:db (assoc db :loading-routes true)
-    :http-xhrio {:method :delete
-                 :uri (str backend-url "/routes"
-                           "?srcIata=" (js/encodeURIComponent (:srcIata route))
-                           "&dstIata=" (js/encodeURIComponent (:dstIata route))
-                           "&airline=" (js/encodeURIComponent (:airline route)))
-                 :format (url-request-format)
-                 :response-format (json-response-format {:keywords? true})
-                 :on-success [:map/remove-route-success]
-                 :on-failure [:map/remove-route-failure]}}))
-
-(rf/reg-event-fx
- :map/remove-route-success
- (fn [{:keys [db]} [_ _]]
-   (js/console.log "Route removed successfully")
-   {:db (assoc db :loading-routes false
-                  :notification {:title "Success" :message "Route removed successfully" :type :success})
-    :fx [[:dispatch [:map/fetch-saved-routes]]
-         [:dispatch-later {:ms 5000 :dispatch [:map/clear-notification]}]]}))
-
-(rf/reg-event-db
- :map/remove-route-failure
- (fn [db [_ error]]
-   (js/console.error "Failed to remove route:" error)
-   (assoc db :loading-routes false
-             :notification {:title "Error" 
-                           :message (str "Failed to remove route: " 
-                                        (or (get-in error [:response :message]) 
-                                            "Unknown error")) 
-                           :type :error})))
-
-(rf/reg-event-fx
- :map/create-simple-route
+ :map/create-route
  (fn [{:keys [db]} [_ src-iata dst-iata]]
-   {:db (assoc db :loading-routes true)
-    :http-xhrio {:method :post
-                 :uri (str backend-url "/routes/new")
-                 :params {:srcIata src-iata :dstIata dst-iata}
-                 :format (json-request-format)
-                 :response-format (json-response-format {:keywords? true})
-                 :on-success [:map/create-simple-route-success]
-                 :on-failure [:map/create-simple-route-failure]}}))
+   {:db (start-loading db)
+    :http-xhrio (http-post
+                 (str backend-url "/routes/new")
+                 {:srcIata src-iata :dstIata dst-iata}
+                 [:map/create-route-success]
+                 [:map/http-error "Failed to create route"])}))
 
 (rf/reg-event-fx
- :map/create-simple-route-success
+ :map/create-route-success
  (fn [{:keys [db]} [_ response]]
-   {:db (assoc db :loading-routes false
-                  :notification {:title "Success" :message (:message response) :type :success})
+   {:db (-> db
+            stop-loading
+            (show-notification "Success" (:message response) :success))
     :fx [[:dispatch [:map/fetch-saved-routes]]
          [:dispatch [:map/reset-route-form]]
          [:dispatch-later {:ms 5000 :dispatch [:map/clear-notification]}]]}))
 
+;; Save picked route
+(rf/reg-event-fx
+ :map/save-picked-route
+ (fn [{:keys [db]} [_ route]]
+   {:db (start-loading db)
+    :http-xhrio (http-post
+                 (str backend-url "/routes")
+                 route
+                 [:map/save-picked-route-success]
+                 [:map/http-error "Failed to save route"])}))
 
 (rf/reg-event-fx
- :map/reset-route-form
- (fn [_ _]
-   ;; This will trigger a custom event that the component can listen to
-   {:dispatch [:map/route-form-reset]}))
+ :map/save-picked-route-success
+ (fn [{:keys [db]} _]
+   {:db (-> db
+            stop-loading
+            (show-notification "Success" "Route saved successfully" :success))
+    :fx [[:dispatch [:map/fetch-saved-routes]]
+         [:dispatch-later {:ms 5000 :dispatch [:map/clear-notification]}]]}))
 
-(rf/reg-event-db
- :map/create-simple-route-failure
- (fn [db [_ _]]
-   (assoc db :loading-routes false
-             :notification {:title "Error" :message "Failed to create route" :type :error})))
+;; Remove route events
+(rf/reg-event-fx
+ :map/remove-route
+ (fn [{:keys [db]} [_ {:keys [srcIata dstIata airline]}]]
+   {:db (start-loading db)
+    :http-xhrio (http-delete
+                 (str backend-url "/routes"
+                      "?srcIata=" (js/encodeURIComponent srcIata)
+                      "&dstIata=" (js/encodeURIComponent dstIata)
+                      "&airline=" (js/encodeURIComponent airline))
+                 [:map/remove-route-success]
+                 [:map/http-error "Failed to remove route"])}))
 
-(rf/reg-event-db
- :map/clear-notification
- (fn [db _]
-   (dissoc db :notification)))
+(rf/reg-event-fx
+ :map/remove-route-success
+ (fn [{:keys [db]} _]
+   {:db (-> db
+            stop-loading
+            (show-notification "Success" "Route removed successfully" :success))
+    :fx [[:dispatch [:map/fetch-saved-routes]]
+         [:dispatch-later {:ms 5000 :dispatch [:map/clear-notification]}]]}))
 
+;; Focus route
 (rf/reg-event-fx
  :map/focus-route
  (fn [{:keys [db]} [_ route]]
-   (let [src-lat (js/parseFloat (get-in route [:srcAirport :lat]))
-         src-lng (js/parseFloat (get-in route [:srcAirport :lng]))
-         dst-lat (js/parseFloat (get-in route [:dstAirport :lat]))
-         dst-lng (js/parseFloat (get-in route [:dstAirport :lng]))
+   (let [src-lat (-> route :srcAirport :lat js/parseFloat)
+         src-lng (-> route :srcAirport :lng js/parseFloat)
+         dst-lat (-> route :dstAirport :lat js/parseFloat)
+         dst-lng (-> route :dstAirport :lng js/parseFloat)
          center-lat (/ (+ src-lat dst-lat) 2)
          center-lng (/ (+ src-lng dst-lng) 2)]
-     {:db (assoc-in db [:map :selected-route] route)
+     {:db (assoc db :map/selected-route route)
       :fx [[:dispatch [:map/set-center {:lat center-lat :lng center-lng}]]
            [:dispatch [:map/set-zoom 5]]]})))
 
+;; Notification events
+(rf/reg-event-db
+ :map/clear-notification
+ (fn [db _]
+   (clear-notification db)))
+
+;; Globe instance
 (rf/reg-event-db
  :map/set-globe-instance
  (fn [db [_ globe]]
-   (assoc db :globe-instance globe)))
+   (assoc db :map/globe-instance globe)))
+
+;; Form reset
+(rf/reg-event-db
+ :map/reset-route-form
+ (fn [db _]
+   (assoc db :map/route-form {:src "" :dst ""})))
+
+(rf/reg-event-db
+ :map/update-route-form-src
+ (fn [db [_ value]]
+   (assoc-in db [:map/route-form :src] value)))
+
+(rf/reg-event-db
+ :map/update-route-form-dst
+ (fn [db [_ value]]
+   (assoc-in db [:map/route-form :dst] value)))
+
+;; Error handling
+(rf/reg-event-db
+ :map/http-error
+ (fn [db [_ message error]]
+   (-> db
+       stop-loading
+       (show-notification "Error" message :error))))

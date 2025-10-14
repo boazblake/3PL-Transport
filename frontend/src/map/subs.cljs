@@ -1,64 +1,104 @@
 (ns map.subs
   (:require [re-frame.core :as rf]))
 
-; ;; Clear existing subscriptions to prevent overwriting warnings
-; (rf/clear-sub :map/notification)
-; (rf/clear-sub :map/available-routes)
-; (rf/clear-sub :map/center)
-; (rf/clear-sub :map/zoom)
-; (rf/clear-sub :map/search)
-; (rf/clear-sub :map/history)
-; (rf/clear-sub :map/routes)
-; (rf/clear-sub :map/show-route-picker)
-; (rf/clear-sub :map/loading-routes)
-; (rf/clear-sub :map/selected-route)
-
+;; Layer 2: Direct subscriptions
 (rf/reg-sub
  :map/notification
  (fn [db _]
-   (:notification db)))
+   (:map/notification db)))
 
 (rf/reg-sub
  :map/available-routes
  (fn [db _]
-   (:available-routes db [])))
+   (:map/available-routes db [])))
 
 (rf/reg-sub
  :map/center
  (fn [db _]
-   (get-in db [:map :center] {})))
+   (:map/center db)))
 
 (rf/reg-sub
  :map/zoom
  (fn [db _]
-   (get-in db [:map :zoom] 4)))
+   (:map/zoom db 4)))
 
 (rf/reg-sub
  :map/search
  (fn [db _]
-   (get-in db [:map :search] "")))
+   (:map/search db "")))
 
 (rf/reg-sub
  :map/history
  (fn [db _]
-   (get-in db [:map :history] [])))
+   (:map/history db [])))
 
 (rf/reg-sub
  :map/routes
  (fn [db _]
-   (:routes db [])))
+   (:map/routes db [])))
 
 (rf/reg-sub
  :map/show-route-picker
  (fn [db _]
-   (get-in db [:map :show-route-picker] false)))
+   (:map/show-route-picker db false)))
 
 (rf/reg-sub
  :map/loading-routes
  (fn [db _]
-   (get-in db [:map :loading-routes] false)))
+   (:map/loading-routes db false)))
 
 (rf/reg-sub
  :map/selected-route
  (fn [db _]
-   (get-in db [:map :selected-route])))
+   (:map/selected-route db)))
+
+(rf/reg-sub
+ :map/globe-instance
+ (fn [db _]
+   (:map/globe-instance db)))
+
+;; Layer 3: Derived subscriptions
+(rf/reg-sub
+ :map/sorted-airports
+ :<- [:map/available-routes]
+ (fn [routes _]
+   (sort-by :name routes)))
+
+(rf/reg-sub
+ :map/filtered-source-airports
+ :<- [:map/sorted-airports]
+ (fn [airports [_ excluded-iata]]
+   (if (seq excluded-iata)
+     (filter #(not= (:iata %) excluded-iata) airports)
+     airports)))
+
+(rf/reg-sub
+ :map/filtered-dest-airports
+ :<- [:map/sorted-airports]
+ (fn [airports [_ excluded-iata]]
+   (if (seq excluded-iata)
+     (filter #(not= (:iata %) excluded-iata) airports)
+     airports)))
+
+(rf/reg-sub
+ :map/route-count
+ :<- [:map/routes]
+ (fn [routes _]
+   (count routes)))
+
+(rf/reg-sub
+ :map/has-notification?
+ :<- [:map/notification]
+ (fn [notification _]
+   (boolean notification)))
+
+;; Route form subscriptions
+(rf/reg-sub
+ :map/route-form-src
+ (fn [db _]
+   (get-in db [:map/route-form :src] "")))
+
+(rf/reg-sub
+ :map/route-form-dst
+ (fn [db _]
+   (get-in db [:map/route-form :dst] "")))

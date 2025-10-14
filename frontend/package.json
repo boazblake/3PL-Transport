@@ -7,7 +7,7 @@
     "release": "shadow-cljs release app"
   },
   "dependencies": {
-    "@openglobus/og": "^0.27.14",
+    "@openglobus/og": "^0.27.15",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
