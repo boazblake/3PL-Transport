@@ -5,6 +5,37 @@
             [map.db :as db]))
 
 (def backend-url "http://localhost:8080")
+(def storage-key "map-demo-routes")
+(def history-storage-key "map-demo-search-history")
+
+(defn- demo-mode? []
+  (not (contains? #{"localhost" "127.0.0.1"} (.-hostname js/location))))
+
+(defn- read-storage [key fallback]
+  (try
+    (if-let [value (.getItem (.-localStorage js/window) key)]
+      (js->clj (js/JSON.parse value) :keywordize-keys true)
+      fallback)
+    (catch :default _ fallback)))
+
+(defn- write-storage! [key value]
+  (.setItem (.-localStorage js/window) key (js/JSON.stringify (clj->js value))))
+
+(defn- airport-by-iata [airports iata]
+  (first (filter #(= (:iata %) iata) airports)))
+
+(defn- demo-route [src dst]
+  {:airline "DEMO-AIR"
+   :airlineId "DEMO-AIR"
+   :srcIata (:iata src)
+   :srcAirportId ""
+   :dstIata (:iata dst)
+   :dstAirportId ""
+   :codeshare ""
+   :stops "0"
+   :equipment "Demo"
+   :srcAirport src
+   :dstAirport dst})
 
 ;; Coeffects
 (rf/reg-cofx
@@ -53,11 +84,15 @@
 (rf/reg-event-fx
  :initialize
  (fn [_ _]
-   {:db db/default-db
-    :fx [[:dispatch [:map/fetch-initial-data]]
-         [:dispatch [:map/fetch-search-history]]
-         [:dispatch [:map/fetch-saved-routes]]
-         [:dispatch [:map/fetch-available-routes]]]}))
+   (if (demo-mode?)
+     {:db (assoc db/default-db :map/available-routes db/demo-airports)
+      :fx [[:dispatch [:map/fetch-search-history]]
+           [:dispatch [:map/fetch-saved-routes]]]}
+     {:db db/default-db
+      :fx [[:dispatch [:map/fetch-initial-data]]
+           [:dispatch [:map/fetch-search-history]]
+           [:dispatch [:map/fetch-saved-routes]]
+           [:dispatch [:map/fetch-available-routes]]]})))
 
 ;; Map data events
 (rf/reg-event-fx
@@ -80,11 +115,13 @@
 (rf/reg-event-fx
  :map/fetch-search-history
  (fn [{:keys [db]} _]
-   {:db db
-    :http-xhrio (http-get
-                 (str backend-url "/search-history")
-                 [:map/set-search-history]
-                 [:map/http-error "Failed to fetch search history"])}))
+   (if (demo-mode?)
+     {:db (assoc db :map/history (read-storage history-storage-key []))}
+     {:db db
+      :http-xhrio (http-get
+                   (str backend-url "/search-history")
+                   [:map/set-search-history]
+                   [:map/http-error "Failed to fetch search history"])})))
 
 (rf/reg-event-db
  :map/set-search-history
@@ -128,12 +165,16 @@
 (rf/reg-event-fx
  :map/save-search
  (fn [{:keys [db]} [_ location lat lng timestamp]]
-   {:db db
-    :http-xhrio (http-post
-                 (str backend-url "/search")
-                 {:location location :lat lat :lng lng :timestamp timestamp}
-                 [:map/fetch-search-history]
-                 [:map/http-error "Failed to save search"])}))
+   (if (demo-mode?)
+     (let [history (conj (:map/history db) {:location location :lat lat :lng lng :timestamp timestamp})]
+       (write-storage! history-storage-key history)
+       {:db (assoc db :map/history history)})
+     {:db db
+      :http-xhrio (http-post
+                   (str backend-url "/search")
+                   {:location location :lat lat :lng lng :timestamp timestamp}
+                   [:map/fetch-search-history]
+                   [:map/http-error "Failed to save search"])})))
 
 ;; Map view events
 (rf/reg-event-db
@@ -181,14 +222,23 @@
        (assoc :map/available-routes airports)
        stop-loading)))
 
+(defn- default-demo-routes []
+  [(demo-route (airport-by-iata db/demo-airports "SFO")
+               (airport-by-iata db/demo-airports "JFK"))
+   (demo-route (airport-by-iata db/demo-airports "LHR")
+               (airport-by-iata db/demo-airports "NRT"))])
+
 (rf/reg-event-fx
  :map/fetch-saved-routes
  (fn [{:keys [db]} _]
-   {:db (start-loading db)
-    :http-xhrio (http-get
-                 (str backend-url "/routes")
-                 [:map/set-saved-routes]
-                 [:map/http-error "Failed to fetch routes"])}))
+   (if (demo-mode?)
+     {:db (assoc (stop-loading db) :map/routes
+                 (read-storage storage-key (default-demo-routes)))}
+     {:db (start-loading db)
+      :http-xhrio (http-get
+                   (str backend-url "/routes")
+                   [:map/set-saved-routes]
+                   [:map/http-error "Failed to fetch routes"])})))
 
 (rf/reg-event-db
  :map/set-saved-routes
@@ -206,12 +256,25 @@
 (rf/reg-event-fx
  :map/create-route
  (fn [{:keys [db]} [_ src-iata dst-iata]]
-   {:db (start-loading db)
-    :http-xhrio (http-post
-                 (str backend-url "/routes/new")
-                 {:srcIata src-iata :dstIata dst-iata}
-                 [:map/create-route-success]
-                 [:map/http-error "Failed to create route"])}))
+   (if (demo-mode?)
+     (let [src (airport-by-iata (:map/available-routes db) src-iata)
+           dst (airport-by-iata (:map/available-routes db) dst-iata)
+           route (demo-route src dst)
+           routes (if (some #(and (= src-iata (:srcIata %)) (= dst-iata (:dstIata %))) (:map/routes db))
+                    (:map/routes db)
+                    (conj (:map/routes db) route))]
+       (write-storage! storage-key routes)
+       {:db (-> db
+                (assoc :map/routes routes)
+                (assoc :map/route-form {:src "" :dst ""})
+                stop-loading
+                (show-notification "Success" "Demo route saved in this browser" :success))})
+     {:db (start-loading db)
+      :http-xhrio (http-post
+                   (str backend-url "/routes/new")
+                   {:srcIata src-iata :dstIata dst-iata}
+                   [:map/create-route-success]
+                   [:map/http-error "Failed to create route"])})))
 
 (rf/reg-event-fx
  :map/create-route-success
@@ -247,14 +310,23 @@
 (rf/reg-event-fx
  :map/remove-route
  (fn [{:keys [db]} [_ {:keys [srcIata dstIata airline]}]]
-   {:db (start-loading db)
-    :http-xhrio (http-delete
-                 (str backend-url "/routes"
-                      "?srcIata=" (js/encodeURIComponent srcIata)
-                      "&dstIata=" (js/encodeURIComponent dstIata)
-                      "&airline=" (js/encodeURIComponent airline))
-                 [:map/remove-route-success]
-                 [:map/http-error "Failed to remove route"])}))
+   (if (demo-mode?)
+     (let [routes (filterv #(not (and (= srcIata (:srcIata %))
+                                      (= dstIata (:dstIata %))
+                                      (= airline (:airline %)))) (:map/routes db))]
+       (write-storage! storage-key routes)
+       {:db (-> db
+                (assoc :map/routes routes)
+                stop-loading
+                (show-notification "Success" "Demo route removed" :success))})
+     {:db (start-loading db)
+      :http-xhrio (http-delete
+                   (str backend-url "/routes"
+                        "?srcIata=" (js/encodeURIComponent srcIata)
+                        "&dstIata=" (js/encodeURIComponent dstIata)
+                        "&airline=" (js/encodeURIComponent airline))
+                   [:map/remove-route-success]
+                   [:map/http-error "Failed to remove route"])})))
 
 (rf/reg-event-fx
  :map/remove-route-success
