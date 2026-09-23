@@ -1,6 +1,16 @@
 (ns map.views.globe-utils
   (:require ["@openglobus/og" :as og]))
 
+(defn- geodetic-to-cartesian [lon lat height]
+  (let [radius (+ 6378137 height)
+        lon-radians (* lon (/ js/Math.PI 180))
+        lat-radians (* lat (/ js/Math.PI 180))
+        cos-lat (js/Math.cos lat-radians)]
+    (new og/Vec3
+         (* radius cos-lat (js/Math.cos lon-radians))
+         (* radius cos-lat (js/Math.sin lon-radians))
+         (* radius (js/Math.sin lat-radians)))))
+
 (defn- bezier-point [ellipsoid src dst t num-segments]
   "Compute a point on a Bezier curve between two points on the globe."
   (let [dist+az (.inverse ellipsoid src dst)
@@ -25,10 +35,10 @@
         _ (set! (.-height p75) arc-height)
         
         ;; Convert to cartesian
-        start (.geodeticToCartesian ellipsoid (.-lon src) (.-lat src) (.-height src))
-        end (.geodeticToCartesian ellipsoid (.-lon dst) (.-lat dst) (.-height dst))
-        c25 (.geodeticToCartesian ellipsoid (.-lon p25) (.-lat p25) (.-height p25))
-        c75 (.geodeticToCartesian ellipsoid (.-lon p75) (.-lat p75) (.-height p75))]
+        start (geodetic-to-cartesian (.-lon src) (.-lat src) (.-height src))
+        end (geodetic-to-cartesian (.-lon dst) (.-lat dst) (.-height dst))
+        c25 (geodetic-to-cartesian (.-lon p25) (.-lat p25) (.-height p25))
+        c75 (geodetic-to-cartesian (.-lon p75) (.-lat p75) (.-height p75))]
     
     (.bezier3v (.-math og) t start c25 c75 end)))
 
