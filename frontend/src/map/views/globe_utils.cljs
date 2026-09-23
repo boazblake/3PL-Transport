@@ -2,11 +2,12 @@
   (:require ["@openglobus/og" :as og]))
 
 (defn- bezier-point [ellipsoid src dst t num-segments]
+  "Compute a point on a Bezier curve between two points on the globe."
   (let [dist+az (.inverse ellipsoid src dst)
         dist (.-distance dist+az)
         az (.-initialAzimuth dist+az)
-        height 50000
-        arc-height (+ height (/ dist 4))
+        height 0 ;; Increased from 50000 for "larger"
+        arc-height (+ height (/ dist 4.5))  ;; Adjusted from (/ dist 4) for larger arc
         
         ;; Calculate control points
         p25 (.getGreatCircleDestination ellipsoid src az (* dist 0.25))
@@ -29,8 +30,8 @@
 (defn create-path
   "Creates a bezier path between two points on the globe with optional styling."
   [ellipsoid src dst num-segments {:keys [color opacity]
-                                   :or {color [1.0 0.5 0.0]
-                                        opacity 0.8}}]
+                                   :or {color [1.5 0.1 0.0]
+                                        opacity 1.0}}]
   (let [path (js/Array.)
         colors (js/Array.)]
     (dotimes [i (inc num-segments)]
@@ -75,7 +76,7 @@
          (-> acc
              (update :paths conj path)
              (update :colors conj colors)
-             (update :anim-indices conj (.randomi (.-math og) 0 num-segments))))
+             (update :anim-indices conj 0)))
        acc))
    {:paths [] :colors [] :anim-indices []}
    routes))
@@ -91,7 +92,7 @@
       (let [entity (new og/Entity
                         #js {:polyline #js {:path3v (clj->js paths)
                                            :pathColors (clj->js colors)
-                                           :thickness 3
+                                           :thickness 6.0 ;; Increased from 3 for "larger" and "elegant"
                                            :isClosed false
                                            :visibility true}})]
         (.add collection entity)
@@ -99,15 +100,15 @@
          :anim-index (clj->js anim-indices)}))))
 
 (defn- animate-point [poly idx anim-idx num-segments color-array j]
-  "Animate a single point on a polyline with fading trail effect."
+  "Animate a single point on a polyline with an elegant, asteroid-like fading trail effect."
   (let [colors (aget color-array j)
         [r g b] [(aget colors 0 0) (aget colors 0 1) (aget colors 0 2)]
-        new-idx (if (> idx (+ num-segments 4)) 0 (inc idx))]
+        new-idx (if (> idx (+ num-segments 6)) 0 (inc idx))] ;; Adjusted for longer trail
     
     (aset anim-idx j new-idx)
     
-    ;; Set colors for animated segments with opacity fade
-    (doseq [[offset opacity] [[0 0.8] [1 0.6] [2 0.3] [3 0.1]]]
+    ;; Set colors for animated segments with smoother, elegant opacity fade
+    (doseq [[offset opacity] [[0 1.0] [1 0.9] [2 0.7] [3 0.4] [4 0.2] [5 0.1]]]
       (when (>= (- idx offset) 0)
         (.setPointColor poly #js [r g b opacity] (- idx offset) j)))
     
