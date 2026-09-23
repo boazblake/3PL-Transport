@@ -25,10 +25,10 @@
         _ (set! (.-height p75) arc-height)
         
         ;; Convert to cartesian
-        start (.lonLatToCartesian ellipsoid src)
-        end (.lonLatToCartesian ellipsoid dst)
-        c25 (.lonLatToCartesian ellipsoid p25)
-        c75 (.lonLatToCartesian ellipsoid p75)]
+        start (.geodeticToCartesian ellipsoid (.-lon src) (.-lat src) (.-height src))
+        end (.geodeticToCartesian ellipsoid (.-lon dst) (.-lat dst) (.-height dst))
+        c25 (.geodeticToCartesian ellipsoid (.-lon p25) (.-lat p25) (.-height p25))
+        c75 (.geodeticToCartesian ellipsoid (.-lon p75) (.-lat p75) (.-height p75))]
     
     (.bezier3v (.-math og) t start c25 c75 end)))
 
