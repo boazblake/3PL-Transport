@@ -1,7 +1,7 @@
 (ns map.views.globe-utils
   (:require ["@openglobus/og" :as og]))
 
-(defn- bezier-point [ellipsoid src dst t num-segments]
+(defn- bezier-point [ellipsoid src dst t num-segments LonLat]
   "Compute a point on a Bezier curve between two points on the globe."
   (let [dist+az (.inverse ellipsoid src dst)
         dist (.-distance dist+az)
@@ -9,9 +9,14 @@
         height 0 ;; Increased from 50000 for "larger"
         arc-height (+ height (/ dist 4.5))  ;; Adjusted from (/ dist 4) for larger arc
         
-        ;; Calculate control points
-        p25 (.getGreatCircleDestination ellipsoid src az (* dist 0.25))
-        p75 (.getGreatCircleDestination ellipsoid src az (* dist 0.75))
+        ;; Calculate control points using the public LonLat constructor. Some
+        ;; OpenGlobus releases do not expose great-circle destination helpers.
+        p25 (new LonLat
+                 (+ (.-lon src) (* 0.25 (- (.-lon dst) (.-lon src))))
+                 (+ (.-lat src) (* 0.25 (- (.-lat dst) (.-lat src)))))
+        p75 (new LonLat
+                 (+ (.-lon src) (* 0.75 (- (.-lon dst) (.-lon src))))
+                 (+ (.-lat src) (* 0.75 (- (.-lat dst) (.-lat src)))))
         
         ;; Set heights
         _ (set! (.-height src) height)
@@ -36,7 +41,7 @@
         colors (js/Array.)]
     (dotimes [i (inc num-segments)]
       (let [t (/ i num-segments)
-            point (bezier-point ellipsoid src dst t num-segments)
+            point (bezier-point ellipsoid src dst t num-segments LonLat)
             [r g b] color]
         (.push path point)
         (.push colors #js [r g b opacity])))
