@@ -69,7 +69,7 @@
                         {:entities (:entities render-result)
                          :anim-index (:anim-index render-result)
                          :num-segments num-segments})
-              :fx [[:dispatch [:globe/start-animation]]]}
+              :fx []}
              {:db db}))
          (catch :default e
            (js/console.error "Error rendering routes:" e)
